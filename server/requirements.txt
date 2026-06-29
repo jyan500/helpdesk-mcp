@@ -1,0 +1,23 @@
+fastapi==0.136.3
+uvicorn==0.49.0
+watchfiles==1.2.0
+tzdata==2026.2  # IANA timezone DB for zoneinfo on Windows (OS ships no tz database)
+
+# LLM + config (used since Phase 0; backfilled here so the file is accurate)
+google-genai==2.8.0
+python-dotenv==1.2.2
+
+# Phase 2 — async Postgres access
+sqlalchemy>=2.0          # 2.x ORM with native async support
+asyncpg==0.31.0          # async Postgres driver SQLAlchemy talks through
+greenlet==3.5.1          # required by SQLAlchemy's async bridge
+
+# Phase 3 — RAG: local embeddings + vector math
+# Embeddings run LOCALLY (free, no per-token cost). all-MiniLM-L6-v2 -> 384-dim.
+# sentence-transformers pulls in torch + transformers (a few hundred MB on first install).
+sentence-transformers==5.6.0
+# We do cosine similarity in Python for now. The "production" path is pgvector,
+# but that needs compiling on native Windows Postgres — deferred to a later step.
+# The DocChunk.embedding column is a plain float[] so swapping in Vector(384) later
+# is a column-type change, not a rewrite.
+numpy>=2.0
