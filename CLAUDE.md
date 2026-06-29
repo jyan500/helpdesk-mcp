@@ -4,76 +4,101 @@ Guidance for Claude Code when working in this repository.
 
 ## What this project is
 
-**Helpdesk Copilot** is an autonomous support-operations agent built as a **learning project**
-for getting hands-on with modern AI tooling (agents, tool calling, RAG, orchestration,
-human-in-the-loop). It follows the 12-week roadmap in
-[`helpdesk-copilot-build-plan.md`](./helpdesk-copilot-build-plan.md) — read that file first;
-it is the source of truth for scope and sequencing.
+**MCP Helpdesk** is a follow-on **learning project** that takes the support-operations agent from
+[`helpdesk-copilot`](../helpdesk-copilot) and rebuilds its tool layer on the **Model Context Protocol
+(MCP)**. The goal is to learn the *provider* side of the tool boundary and to let a **framework** run
+the agent loop, instead of the hand-built loop from the original project. It follows the roadmap in
+[`mcp-helpdesk-build-plan.md`](./mcp-helpdesk-build-plan.md) — read that file first; it is the source
+of truth for scope and sequencing.
 
-> **This is not a production system.** It is paced for part-time learning, with the explicit goal
-> of *understanding* how each piece works rather than shipping something hardened. Favor clarity,
-> teachability, and "build it by hand to learn it" over robustness, abstraction, or completeness.
-> Don't add production concerns (auth, scaling, exhaustive error handling, CI/CD) unless the
-> current phase calls for them or the user asks.
+> **This is not a production system.** It is paced for part-time learning, with the explicit goal of
+> *understanding* how each piece works rather than shipping something hardened. Favor clarity,
+> teachability, and going deep on one slice over robustness, abstraction, or completeness. Don't add
+> production concerns (auth, scaling, exhaustive error handling, CI/CD) unless the current phase calls
+> for them or the user asks.
+
+## This repo is a fork — what's already here
+
+This repo was forked from `helpdesk-copilot` as a starting point, so unlike a fresh project the
+backend is **already built**:
+
+- `server/tools/` — the working tool functions (`issue_refund`, `create_ticket`, `send_email`,
+  `search_docs`). **These get re-exposed as MCP tools; reuse the bodies, change only the registration.**
+- `server/db/`, `server/knowledge/`, `server/utils/embeddings.py` — Postgres + `pgvector`, seeded
+  data, the knowledge base, and local embeddings. Carried over and reused as-is.
+- `server/agent/` (`loop.py`, `orchestrator.py`, etc.) — the **hand-built agent loop, kept on purpose
+  as a reference.** Do not extend it; it exists so you can diff "hand-built loop" against the framework
+  loop. The framework replaces it.
+- `client/` — the original Next.js app. Not central to this project; leave it unless a phase needs it.
 
 ## Guiding principle
 
-Build a thin end-to-end **walking skeleton** first (chat → backend → LLM → streamed response),
-then deepen **one slice at a time**. Each phase makes one slice real.
+Build a thin end-to-end **walking skeleton** first (one MCP tool a real client can call), then deepen
+**one slice at a time**. Each phase makes one slice real.
 
-**Build the agent loop by hand through Phases 1–4 — do not reach for an agent framework.**
-The whole point is to understand the tool-calling handshake the framework would hide. Frameworks
-(Pydantic AI, LangGraph) are an optional stretch goal *after* the fundamentals are solid.
+**This time, DO use a framework for the agent loop.** That is the deliberate inversion of the original
+project: you already understand the tool-calling handshake by hand, so here the lesson is the MCP
+boundary and letting **Pydantic AI** drive the loop. Don't re-implement loop/dispatch logic that the
+framework provides.
+
+## The one new idea
+
+In the original project you were always the **caller** of tools. MCP flips you to the **provider**
+side. The payoff: once the tools live behind an MCP server, *any* client — Claude Desktop, Claude
+Code, a Pydantic AI agent — can use them with zero glue code. Keep that "write once, consumed by many
+clients" goal in view; it's what every phase builds toward.
 
 ## Stack
 
-- **Frontend** (`client/`): Next.js (App Router) + TypeScript; streams responses over SSE.
-- **Backend** (`server/`): FastAPI + Pydantic + async SQLAlchemy, served with uvicorn.
-- **Database:** Postgres + `pgvector` (run locally via Docker).
-- **Embeddings:** `sentence-transformers` locally (free, no per-token cost).
-- **LLM:** cheapest current Gemini Flash-Lite tier, accessed through an **OpenAI-compatible**
-  chat-completions interface so the provider is a base-URL + key change, not a rewrite.
-- **Integrations:** Stripe **test mode**, ticketing free tier or mock, email free tier or mock.
-  Never trigger a paid or irreversible real-world action.
-
-Both `client/` and `server/` are currently empty scaffolding — the project is at Phase 0.
+- **MCP server** (`server/`): the standalone **`fastmcp`** package (FastMCP 2.x), decorator-based
+  (`@mcp.tool`, `@mcp.resource`, `@mcp.prompt`). NOT the FastMCP bundled inside the older `mcp` SDK —
+  the standalone project is the maintained one.
+- **Transports:** **stdio** (local, simplest — start here) and **Streamable HTTP** (modern remote,
+  single `/mcp` endpoint). **Ignore SSE** — that transport reached end-of-life in early 2026.
+- **Framework client:** **Pydantic AI** as an MCP client (`MCPToolset`, `MCPServerStreamableHTTP`,
+  `StdioTransport`). Symmetric stack: FastMCP server ↔ Pydantic AI client, same ecosystem.
+- **Reused backend:** Postgres + `pgvector` (Docker), `sentence-transformers` embeddings (local,
+  free), seeded data, knowledge base — all from the fork.
+- **LLM:** cheapest current Gemini Flash-Lite tier via an OpenAI-compatible interface; provider is a
+  base-URL + key change, not a rewrite.
 
 ## Cost guardrails (apply from day one)
 
-Costs must stay near zero. When writing LLM code:
+Costs must stay near zero:
 
-- Cap `max_output_tokens`.
-- Cap agent-loop iterations (e.g. max ~6) to prevent runaway loops — the classic way to burn quota.
+- Cap `max_output_tokens` and the **framework agent's** max iterations — a framework loop runs away
+  just as easily as a hand-built one.
 - Log input/output token counts and latency per request so spend is visible before dashboards update.
-- Keep embeddings local; keep all integrations in test mode or mocked.
-
-The real spend control is a per-project **Spend Cap** in Google AI Studio — keep that in mind but
-it is a config step, not code.
+- Keep embeddings local; keep all actions mocked/sandboxed (no Stripe, no SMTP — same as the fork).
+- The real spend control is the per-project **Spend Cap** in Google AI Studio (a config step).
 
 ## Phase roadmap (see build plan for full detail)
 
-- **Phase 0 (Wk 1):** Walking skeleton — `/chat` endpoint streaming an LLM reply over SSE.
-- **Phase 1 (Wk 2):** Tool-calling loop by hand — one trivial tool, iteration cap, logged steps.
-- **Phase 2 (Wk 3–4):** Account agent + async SQLAlchemy over seeded Postgres data.
-- **Phase 3 (Wk 5–6):** Knowledge agent with RAG — chunk, embed, `pgvector` search, cite sources.
-- **Phase 4 (Wk 7–8):** Orchestrator agent — classify intent and route to the right specialist.
-- **Phase 5 (Wk 9–10):** Action agent + human-in-the-loop approval gate on irreversible actions.
-- **Phase 6 (Wk 11–12):** Observability (agent-thoughts panel, logging/cost tracking), hardening, optional deploy, write-up.
+- **Phase 0 (Days 1–2):** Hello, MCP — a one-tool `fastmcp` server over stdio, called from Claude Desktop.
+- **Phase 1 (Days 3–5):** Port the real helpdesk tools as `@mcp.tool`s against the seeded Postgres.
+- **Phase 2 (Days 6–8):** The two new primitives — a **resource** (read-only context) and a **prompt** (template).
+- **Phase 3 (Days 9–11):** Drive the server with a **Pydantic AI** agent; compare to the kept `server/agent/loop.py`.
+- **Phase 4 (Days 12–14):** Flip to **Streamable HTTP**; one running server used by 2+ clients at once.
+- **Phase 5 (optional):** Polish, write-up, stretch: protocol-level approval/elicitation for gated actions.
 
-When starting work, identify which phase is active and stay within its scope — the value is in
-going deep on one slice, not racing ahead.
+When starting work, identify which phase is active and stay within its scope.
 
 ## Working conventions
 
-- **Verify live LLM details before relying on them.** Gemini model names, free-tier limits, and
-  pricing shifted in early 2026 and keep moving. Don't hardcode assumptions about the cheapest model.
-- **Provider-agnostic LLM client:** write against the OpenAI-compatible chat-completions shape.
-- **Security mindset even in a toy:** scope DB queries; never hand the model raw SQL execution;
-  gate irreversible actions behind explicit human approval.
-- **Learning-first:** when a concept is new, a small throwaway example to understand it is
-  encouraged. Leave short notes on design decisions — they feed the eventual README and blog post.
+- **Verify live MCP details before relying on them.** FastMCP 2.x and the Pydantic AI MCP client were
+  still settling in mid-2026 (FastMCP v2 stable targeted ~2026-07-27). Pin versions and re-check the
+  FastMCP / Pydantic AI docs for the current API shape before coding each phase — don't hardcode
+  signatures from memory.
+- **Pick the right primitive:** tools = actions (POST, side effects), resources = read-only context
+  (GET), prompts = reusable interaction templates. Choosing correctly is a core lesson of Phase 2.
+- **Security mindset even in a toy:** scope DB queries; never hand the model raw SQL execution; keep
+  irreversible actions (`issue_refund`, `send_email`) gated behind explicit approval.
+- **Learning-first:** when a concept is new, a small throwaway example to understand it is encouraged.
+  Leave short design notes — especially the hand-built-loop vs. framework-loop comparison — they feed
+  the eventual README and blog post.
 
 ## Commands
 
-No build/test/run commands are established yet (Phase 0 not yet implemented). Update this section as
-the Next.js app and FastAPI service get scaffolded.
+No MCP build/run commands are established yet (Phase 0 not yet implemented). The reused backend's
+setup (Docker Postgres, `python -m db.seed`, `python -m db.ingest`) still applies. Update this section
+as the `fastmcp` server and Pydantic AI client get scaffolded.
