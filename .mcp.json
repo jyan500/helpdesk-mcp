@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "helpdesk": {
+      "type": "stdio",
+      "command": "C:/Users/janse/mcp-helpdesk/server/.venv/Scripts/python.exe",
+      "args": ["C:/Users/janse/mcp-helpdesk/server/mcp_server.py"]
+    }
+  }
+}

@@ -99,6 +99,15 @@ When starting work, identify which phase is active and stay within its scope.
 
 ## Commands
 
-No MCP build/run commands are established yet (Phase 0 not yet implemented). The reused backend's
-setup (Docker Postgres, `python -m db.seed`, `python -m db.ingest`) still applies. Update this section
-as the `fastmcp` server and Pydantic AI client get scaffolded.
+Server env lives in `server/.venv` (Python 3.14, `fastmcp` 3.x — note: actual installed major is
+**3.x**, not the 2.x the build plan anticipated; the decorator/`run` API was verified against 3.4.2).
+
+- **Run the MCP server (stdio):** `server/.venv/Scripts/python.exe server/mcp_server.py`
+- **Inspect the raw tool list:** `server/.venv/Scripts/fastmcp.exe dev server/mcp_server.py`
+- **Phase 0 client:** registered with **Claude Code** (not Claude Desktop — not installed here) via the
+  project-scoped `.mcp.json` at repo root. Tools surface as `mcp__helpdesk__ping` / `mcp__helpdesk__echo`
+  after approving the server in an interactive `claude` session. Check status with `claude mcp list`.
+
+The reused backend's setup (Docker Postgres, `python -m db.seed`, `python -m db.ingest`) still applies
+and comes online in Phase 1. Update this section as later phases (Pydantic AI client, HTTP transport)
+get scaffolded.
