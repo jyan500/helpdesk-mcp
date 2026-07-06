@@ -55,6 +55,10 @@ from fastmcp import FastMCP
 from db.session import AsyncSessionLocal
 from tools import account, action, knowledge
 
+# Phase 2: the resource reads a ticket row directly (no existing "read ticket" body
+# exists — tickets were only ever created before), so we touch the ORM model here.
+from db.models import Ticket
+
 mcp = FastMCP("helpdesk")
 
 
@@ -179,6 +183,77 @@ async def send_email(to: str, subject: str, body: str) -> dict:
         return await action.send_email(session, to, subject, body)
 
 
+# ===========================================================================
+# PHASE 2 — RESOURCES & PROMPTS (SCAFFOLD — fill in the prompt TODO).
+#
+# The core judgment of this phase is picking the right primitive:
+#   tools     = ACTIONS       (POST, side effects)        -> @mcp.tool      [above]
+#   resources = read CONTEXT  (GET, no side effect)       -> @mcp.resource  [worked below]
+#   prompts   = reusable interaction TEMPLATES            -> @mcp.prompt    [your TODO]
+#
+# Checkpoint — why is "look up this ticket" a RESOURCE, not a tool? Two reasons:
+#   1. No side effect + addressable by id -> it's a GET, i.e. context, not an action.
+#   2. WHO decides to pull it in differs. A tool is something the MODEL chooses to call
+#      mid-loop; a resource is context the CLIENT/user attaches by URI (like opening a
+#      file / @-mentioning it). Same DB read, but a different consumer and intent.
+# ===========================================================================
+
+# WORKED EXAMPLE — a TEMPLATED resource. The {ticket_id} in the URI binds to the
+# same-named function parameter; FastMCP serializes the returned dict as the resource
+# contents. It owns its own session, exactly like the tools do.
+@mcp.resource("ticket://{ticket_id}")
+async def ticket_resource(ticket_id: int) -> dict:
+    """A single support ticket's details, addressable by id. Read-only context —
+    no side effect, just loads the ticket into the conversation."""
+    async with AsyncSessionLocal() as session:
+        t = await session.get(Ticket, ticket_id)
+        if t is None:
+            return {"found": False, "ticket_id": ticket_id}
+        return {
+            "found": True,
+            "id": t.id,
+            "subject": t.subject,
+            "body": t.body,
+            "status": t.status,
+            "customer_email": t.customer_email,
+            "created_at": t.created_at.isoformat(),
+        }
+
+
+# TODO: triage_ticket PROMPT — the second new primitive. A prompt is a reusable
+# template the client can invoke (Claude Code surfaces prompts as slash-commands) so a
+# consistent workflow doesn't have to be re-typed each time.
+#
+# Pointers:
+#   - Decorate a function with @mcp.prompt (bare decorator is fine).
+#   - Its PARAMETERS become the prompt's arguments. Take the ticket's content, e.g.:
+#         def triage_ticket(subject: str, body: str) -> str:
+#     (You could instead take ticket_id and read the DB, but keeping a prompt a PURE
+#      template — data in, instructions out — is the cleaner mental model. Pair it with
+#      the resource above: attach ticket://N to get the data, then run this prompt.)
+#   - RETURN a string. FastMCP turns a returned str into a single 'user' message
+#     (verified). That string is the packaged instruction set — this is the part worth
+#     writing yourself. Have it tell the model to classify the ticket's PRIORITY
+#     (low/normal/high/urgent) and CATEGORY (billing/shipping/account/refund/other),
+#     then propose a next action — and interpolate the {subject}/{body} in.
+#
+# def triage_ticket(subject: str, body: str) -> str:
+#     """Triage a support ticket: classify priority + category and suggest a next step."""
+#     return f"...your template here, using {subject} and {body}..."
+
+@mcp.prompt
+def triage_ticket(subject: str, body: str) -> str:
+    return f"""
+        Given the following support ticket text and subject,
+        please triage the ticket by classifying the priority (low/normal/high/urgent) and category (billing/shipping/account/refund/other), and suggest a next step.
+
+        Subject:
+        {subject}
+
+        Ticket Text:
+        {body}
+    """
+
 
 if __name__ == "__main__":
     import sys
@@ -194,9 +269,19 @@ if __name__ == "__main__":
 
         async def _list():
             async with Client(mcp) as c:
+                print("TOOLS:")
                 for t in await c.list_tools():
                     props = (t.inputSchema or {}).get("properties", {})
-                    print(f"- {t.name}{tuple(props)}")
+                    print(f"  - {t.name}{tuple(props)}")
+                print("RESOURCES (static):")
+                for r in await c.list_resources():
+                    print(f"  - {r.uri}")
+                print("RESOURCE TEMPLATES:")
+                for r in await c.list_resource_templates():
+                    print(f"  - {r.uriTemplate}")
+                print("PROMPTS:")
+                for p in await c.list_prompts():
+                    print(f"  - {p.name}({', '.join(a.name for a in (p.arguments or []))})")
 
         asyncio.run(_list())
     else:

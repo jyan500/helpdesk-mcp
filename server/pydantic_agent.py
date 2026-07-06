@@ -1,0 +1,134 @@
+"""Phase 3 — Drive the MCP server with a FRAMEWORK (Pydantic AI). SCAFFOLD — fill in the TODOs.
+
+This is the payoff of the whole project. In helpdesk-copilot you WROTE the agent loop
+(server/agent/loop.py): the `for i in range(MAX_ITERS)` loop, streaming chunk parsing, the
+Gemini-3 thought_signature echo, the `contents.append` bookkeeping (model turn +
+function_response), and dispatch via `TOOLS[name](session, **args)`. Here a Pydantic AI
+`Agent` does ALL of that for free — you point it at your MCP server as a toolset and call
+`.run()` once. There is deliberately NO loop in this file; that absence IS the lesson.
+
+What the FRAMEWORK now owns (all of this was yours in loop.py):
+  - the loop: discover tools -> send to model -> get tool call -> dispatch -> feed result
+    back -> repeat until a final answer
+  - conversation/history bookkeeping, tool dispatch, and the iteration cap (via UsageLimits)
+
+What is STILL yours (the framework does NOT do these):
+  - tool DESIGN + the MCP server itself (Phases 1-2)
+  - the system prompt / instructions (prompt engineering — lift from loop.py if you want)
+  - model choice + cost guardrails (max_tokens, request_limit)
+
+One contrast worth noting for the write-up: loop.py PAUSES on approval-gated tools
+(requires_approval -> PendingAction). This framework agent has no such gate yet, so it will
+call issue_refund/send_email straight through. Protocol-level approval is Phase 5.
+
+Run (from server/):  .venv/Scripts/python.exe pydantic_agent.py
+Requires .env (GEMINI_API_KEY) + a seeded DB (the spawned mcp_server.py hits Postgres).
+"""
+import asyncio
+import os
+import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
+from pydantic_ai import Agent
+from pydantic_ai.mcp import MCPToolset, StdioTransport
+from pydantic_ai.models.google import GoogleModel
+from pydantic_ai.providers.google import GoogleProvider
+from pydantic_ai.settings import ModelSettings
+from pydantic_ai.usage import UsageLimits
+
+from utils.constants import USE_MODEL  # "gemini-3.1-flash-lite-preview" — same model as loop.py
+
+
+# --- WORKED: the MODEL. Native Gemini via google-genai (your existing key). Provider is a
+#     key/base-url swap, per CLAUDE.md — nothing else changes if you point elsewhere. ------
+model = GoogleModel(
+    USE_MODEL,
+    provider=GoogleProvider(api_key=os.environ["GEMINI_API_KEY"]),
+)
+
+# --- WORKED: your MCP SERVER as a TOOLSET. StdioTransport LAUNCHES mcp_server.py as a
+#     subprocess (the same launch recipe as .mcp.json — command + args), exactly like Claude
+#     Code did; MCPToolset then discovers its tools and exposes them to the agent.
+#     init_timeout is bumped to 60s because importing mcp_server pulls in sentence-
+#     transformers/torch at startup (slow), which trips the default handshake timeout. ------
+helpdesk_toolset = MCPToolset(
+    StdioTransport(
+        command=sys.executable,                      # the venv python running THIS client
+        args=["mcp_server.py"],
+        cwd=str(Path(__file__).resolve().parent),    # so the server's relative imports resolve
+    ),
+    init_timeout=60,
+)
+
+
+# TODO 1 — build the AGENT. This single object replaces your entire loop.py.
+#   agent = Agent(
+#       model,
+#       toolsets=[helpdesk_toolset],   # <- your MCP server; tools discovered automatically
+#       instructions="...",            # <- STILL your job: the system prompt. Adapt one of
+#                                      #    loop.py's *_SYSTEM_PROMPT (the action one fits a
+#                                      #    do-things agent). Tell it to resolve ids with the
+#                                      #    lookup tools before acting, and to be concise.
+#       model_settings=ModelSettings(max_tokens=1000),  # cost guardrail (CLAUDE.md)
+#   )
+
+SYSTEM_PROMPT = """
+You are a helpdesk action agent. You DO things on the user's behalf: issue
+refunds, open support tickets, and send emails.
+
+Many actions need a concrete id the user didn't give you. Resolve it FIRST with
+the lookup tools: call get_customer(email) to get the customer id, then
+get_orders(customer_id) to find the specific order. NEVER invent an order id,
+customer id, or email — if you can't determine the exact target from the data,
+say what's missing instead of guessing.
+
+Once you have the concrete arguments, call the single action tool that does what
+the user asked (issue_refund, create_ticket, or send_email). Do exactly what was
+requested — one action — and don't take extra actions you weren't asked for.
+
+After a tool returns, report the outcome plainly: confirm what was done (include
+the refund/ticket id) on success, or explain what went wrong (e.g. the order was
+already refunded or couldn't be found). Be concise.
+"""
+
+agent = Agent(
+    model,
+    toolsets=[helpdesk_toolset],
+    instructions=SYSTEM_PROMPT,
+    model_settings=ModelSettings(max_tokens=1000)
+)
+
+
+# TODO 2 — run it. Notice: ONE await, no loop of your own. `async with agent` opens the
+# toolset (spawns + handshakes the server); agent.run drives the model<->tool loop.
+#   async def main():
+#       async with agent:
+#           result = await agent.run(
+#               "Refund the latest order for alice@example.com and email her a confirmation.",
+#               usage_limits=UsageLimits(request_limit=6),  # the iteration cap (was MAX_ITERS)
+#           )
+#           print("ANSWER:", result.output)
+#           # cost visibility (CLAUDE.md): usage is an ATTRIBUTE in pydantic-ai 2.5, not a call
+#           print("USAGE:", result.usage)   # input/output tokens + request count
+#
+#   asyncio.run(main())
+
+async def main():
+    async with agent:
+        result = await agent.run(
+            "Refund the latest order for alice@example.com and email her a confirmation.",
+            usage_limits=UsageLimits(request_limit=6)
+        )
+        print("ANSWER: ", result.output)
+        print("USAGE: ", result.usage)
+
+# TODO 3 (optional, for the write-up) — swap the question above for a read-only one first,
+# e.g. "What's the status of alice@example.com's latest order?", and watch the SAME agent
+# chain get_customer -> get_orders with zero routing code (loop.py needed an orchestrator).
+
+if __name__ == "__main__":
+    asyncio.run(main())
