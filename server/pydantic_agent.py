@@ -34,7 +34,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 from pydantic_ai import Agent
-from pydantic_ai.mcp import MCPToolset, StdioTransport
+from pydantic_ai.mcp import MCPToolset, StdioTransport, StreamableHttpTransport
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.settings import ModelSettings
@@ -55,13 +55,31 @@ model = GoogleModel(
 #     Code did; MCPToolset then discovers its tools and exposes them to the agent.
 #     init_timeout is bumped to 60s because importing mcp_server pulls in sentence-
 #     transformers/torch at startup (slow), which trips the default handshake timeout. ------
+
+# helpdesk_toolset = MCPToolset(
+#     StdioTransport(
+#         command=sys.executable,                      # the venv python running THIS client
+#         args=["mcp_server.py"],
+#         cwd=str(Path(__file__).resolve().parent),    # so the server's relative imports resolve
+#     ),
+#     init_timeout=60,
+# )
+
+# PHASE 4 — TODO: swap the stdio toolset above for a Streamable HTTP one. Everything below
+# (the Agent, the run call) is UNCHANGED — you're only changing HOW the client reaches the
+# server: from "spawn a subprocess" to "connect to a running URL". Steps:
+#   1. Start the ONE shared server first, in its own terminal:  python mcp_server.py --http
+#   2. Add StreamableHttpTransport to the import at the top:
+#        from pydantic_ai.mcp import MCPToolset, StdioTransport, StreamableHttpTransport
+#   3. Replace helpdesk_toolset with:
+#        helpdesk_toolset = MCPToolset(
+#            StreamableHttpTransport(url="http://127.0.0.1:8000/mcp"),
+#        )
+#   No command/args/cwd/init_timeout now — there's no subprocess to launch or wait on; the
+#   server is already up, so you just point at its URL.
+
 helpdesk_toolset = MCPToolset(
-    StdioTransport(
-        command=sys.executable,                      # the venv python running THIS client
-        args=["mcp_server.py"],
-        cwd=str(Path(__file__).resolve().parent),    # so the server's relative imports resolve
-    ),
-    init_timeout=60,
+    StreamableHttpTransport(url="http://127.0.0.1:8000/mcp")
 )
 
 
@@ -119,8 +137,10 @@ agent = Agent(
 
 async def main():
     async with agent:
+        refund_request = "Refund the latest order for alice@example.com and email her a confirmation.",
+        latest_order = "What is the status of alice@example.com's latest order?"
         result = await agent.run(
-            "Refund the latest order for alice@example.com and email her a confirmation.",
+            latest_order,
             usage_limits=UsageLimits(request_limit=6)
         )
         print("ANSWER: ", result.output)

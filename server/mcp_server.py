@@ -284,7 +284,19 @@ if __name__ == "__main__":
                     print(f"  - {p.name}({', '.join(a.name for a in (p.arguments or []))})")
 
         asyncio.run(_list())
+    elif "--http" in sys.argv:
+        # PHASE 4 (SCAFFOLD — fill in the TODO): Streamable HTTP. Run ONE long-lived server
+        # that many clients CONNECT to over the network, instead of stdio where each client
+        # spawns its OWN subprocess. Note what does NOT change: every @mcp.tool/@mcp.resource/
+        # @mcp.prompt above is byte-for-byte identical. The transport is the only difference —
+        # that decoupling is the entire point of the protocol.
+        #
+        # TODO: serve over Streamable HTTP. Pointers:
+        #   mcp.run(transport="http", host="127.0.0.1", port=8000, path="/mcp")
+        #   -> clients connect to  http://127.0.0.1:8000/mcp
+        # (host/port/path each have defaults; passing them explicitly makes the URL obvious.)
+        mcp.run(transport="http", host="127.0.0.1", port=8000, path="/mcp")
     else:
         # stdio: the client launches THIS file as a subprocess and speaks MCP over
-        # stdin/stdout. Phase 4 switches this to Streamable HTTP for multi-client use.
+        # stdin/stdout. `--http` (above) is the Phase 4 multi-client alternative.
         mcp.run(transport="stdio")
