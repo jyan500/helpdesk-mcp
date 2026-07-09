@@ -49,7 +49,8 @@ from dotenv import load_dotenv
 # CWD the MCP client launches us from (stdio clients don't guarantee cwd == server/).
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
+from fastmcp.server.elicitation import AcceptedElicitation  # Phase 5: approval result type
 
 # The tool BODIES, reused verbatim — we delegate to these, never reimplement them.
 from db.session import AsyncSessionLocal
@@ -135,22 +136,38 @@ async def search_docs(query: str, top_k: int = knowledge.DEFAULT_TOP_K) -> dict:
 
 
 # ===========================================================================
-# ACTION tools (side effects). issue_refund + send_email are irreversible (see the
-# module docstring's approval note); create_ticket is deliberately ungated. In Phase 1
-# they all register the same way — the gate is a later phase.
+# ACTION tools (side effects). create_ticket is deliberately ungated.
+#
+# PHASE 5 — PROTOCOL-LEVEL APPROVAL via MCP elicitation. issue_refund + send_email are
+# irreversible (tools/action.REQUIRES_APPROVAL), so before performing them the SERVER pauses
+# and asks the CLIENT to confirm with the user — right inside the tool call (ctx.elicit).
+#
+# Compare to helpdesk-copilot's gate (agent/loop.py):
+#   loop.py:    OUT-OF-BAND + STATEFUL. Persist a PendingAction row, END the stream; a separate
+#               /resume endpoint continues after the user decides. Survives a server restart.
+#   MCP elicit: IN-BAND + SYNCHRONOUS. The tool pauses mid-call, the protocol round-trips the
+#               question to the human and the answer straight back — no DB row, no resume route.
+#               Simpler; the tradeoff is the tool call blocks while waiting on the human.
+# Either way the POLICY (which tools are gated) is still yours — tools.action.REQUIRES_APPROVAL.
+# The CLIENT must supply an elicitation handler (see pydantic_agent.py) or the elicit errors.
 # ===========================================================================
-# TODO: issue_refund
-#   arg: order_id: int
-#   docstring: copy from tools/action.issue_refund_decl.
-#   body: delegate to action.issue_refund(session, order_id)
 @mcp.tool
-async def issue_refund(order_id: int) -> dict:
-    """ 
-    Issue a refund for a specific order, identified by its numeric order id. 
-    If you only have the customer's email, look up the customer and their 
-    orders FIRST to get the order id, then call this. This is an irreversible 
+async def issue_refund(order_id: int, ctx: Context) -> dict:
+    """
+    Issue a refund for a specific order, identified by its numeric order id.
+    If you only have the customer's email, look up the customer and their
+    orders FIRST to get the order id, then call this. This is an irreversible
     action and will be confirmed with the user before it runs.
     """
+    # `ctx: Context` is INJECTED by FastMCP (like session — it's server-side, so the model
+    # never sees it in the tool schema). Ask the user to confirm the irreversible action;
+    # reuse describe_action so the prompt reads exactly like loop.py's Approve/Deny summary.
+    decision = await ctx.elicit(
+        f"{action.describe_action('issue_refund', {'order_id': order_id})}?",
+        response_type=None,   # a plain confirm: accept / decline / cancel, no data payload
+    )
+    if not isinstance(decision, AcceptedElicitation):
+        return {"ok": False, "order_id": order_id, "status": "denied"}
     async with AsyncSessionLocal() as session:
         return await action.issue_refund(session, order_id)
 
@@ -169,16 +186,27 @@ async def create_ticket(subject: str, body: str, customer_email: str | None = No
         return await action.create_ticket(session, subject, body, customer_email)
 
 
-# TODO: send_email
-#   args: to: str, subject: str, body: str
-#   docstring: copy from tools/action.send_email_decl.
-#   body: delegate to action.send_email(session, to, subject, body)
+# PHASE 5 — TODO: gate send_email exactly like issue_refund above (it's the OTHER member of
+# tools/action.REQUIRES_APPROVAL). Add `ctx: Context` to the signature, and BEFORE the
+# session/delegate lines, add:
+#     decision = await ctx.elicit(
+#         f"{action.describe_action('send_email', {'to': to})}?", response_type=None)
+#     if not isinstance(decision, AcceptedElicitation):
+#         return {"ok": False, "to": to, "status": "denied"}
+# Keep create_ticket UNGATED (it's not in REQUIRES_APPROVAL) — that contrast is the point.
 @mcp.tool
-async def send_email(to: str, subject: str, body: str) -> dict:
+async def send_email(to: str, subject: str, body: str, ctx: Context) -> dict:
     """
     Mock email with to, subject and body
-    Doesn't send an actual email yet
+    Doesn't send an actual email yet.
+    Will be confirmed with user before the action is taken
     """
+    decision = await ctx.elicit(
+        f"{action.describe_action("send_email", {"to": to})}?",
+        response_type=None
+    )
+    if not isinstance(decision, AcceptedElicitation):
+        return {"ok": False, "to": to, "status": "denied"}
     async with AsyncSessionLocal() as session:
         return await action.send_email(session, to, subject, body)
 

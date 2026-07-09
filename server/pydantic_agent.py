@@ -78,8 +78,27 @@ model = GoogleModel(
 #   No command/args/cwd/init_timeout now — there's no subprocess to launch or wait on; the
 #   server is already up, so you just point at its URL.
 
+# PHASE 5 — the CLIENT half of protocol-level approval. When the server calls ctx.elicit on a
+# gated tool (issue_refund/send_email), THIS handler runs: surface the request to the human and
+# return their decision. In helpdesk-copilot the Next.js frontend rendered Approve/Deny; here
+# the MCP client owns that UX, and the SAME server works with any client that provides one.
+from fastmcp.client.elicitation import ElicitResult
+
+
+async def approval_handler(message, response_type, params, context):
+    ans = input(f"\n[APPROVAL NEEDED] {message}  Approve? [y/N] ").strip().lower()
+    return ElicitResult(action="accept" if ans in ("y", "yes") else "decline")
+
+
+# PHASE 5 — TODO: wire the handler into the toolset so approvals can round-trip. Add the kwarg:
+#     helpdesk_toolset = MCPToolset(
+#         StreamableHttpTransport(url="http://127.0.0.1:8000/mcp"),
+#         elicitation_handler=approval_handler,
+#     )
+# (Then run main() with the REFUND question, not the read-only one, to trigger the prompt.)
 helpdesk_toolset = MCPToolset(
-    StreamableHttpTransport(url="http://127.0.0.1:8000/mcp")
+    StreamableHttpTransport(url="http://127.0.0.1:8000/mcp"),
+    elicitation_handler=approval_handler
 )
 
 
@@ -139,8 +158,9 @@ async def main():
     async with agent:
         refund_request = "Refund the latest order for alice@example.com and email her a confirmation.",
         latest_order = "What is the status of alice@example.com's latest order?"
+        email_request = "Can you send a test email to alice@example.com?"
         result = await agent.run(
-            latest_order,
+            email_request,
             usage_limits=UsageLimits(request_limit=6)
         )
         print("ANSWER: ", result.output)
