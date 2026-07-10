@@ -10,7 +10,7 @@ tools now live behind an **MCP server** that *any* client can use, and the tool-
 by **Pydantic AI** rather than code written by hand.
 
 <!-- demo video goes here -->
-https://github.com/user-attachments/assets/87fe8e4a-8090-4785-acbd-9b95148b00b5
+[Video Demonstration](https://github.com/user-attachments/assets/87fe8e4a-8090-4785-acbd-9b95148b00b5)
 ---
 
 ## The one new idea
