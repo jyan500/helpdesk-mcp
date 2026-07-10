@@ -4,22 +4,19 @@ A follow-on to [`helpdesk-copilot`](../helpdesk-copilot) that **rebuilds the too
 [Model Context Protocol (MCP)](https://modelcontextprotocol.io)** and lets a **framework** run the
 agent loop instead of a hand-rolled one.
 
-Same helpdesk brain — answer account questions, answer policy/how-to questions from a help center
-(RAG), and take sandboxed actions (refunds, tickets, emails) behind a human-approval gate — but the
+The helpdesk tools remain the same, answers account questions, answers policy/how-to questions from a help center
+(RAG), and takes sandboxed actions (refunds, tickets, emails) behind a human-approval gate, but the
 tools now live behind an **MCP server** that *any* client can use, and the tool-calling loop is driven
 by **Pydantic AI** rather than code written by hand.
 
-> This is a **learning project**, paced for understanding over shipping. The whole point is one new
-> fundamental — the MCP provider boundary — done properly.
-
 <!-- demo video goes here -->
-
+https://github.com/user-attachments/assets/87fe8e4a-8090-4785-acbd-9b95148b00b5
 ---
 
 ## The one new idea
 
-In the original project you were always the **caller** of tools: you wrote the loop, the dispatch, and
-the JSON schemas. MCP flips you to the other side of the boundary — you become the **provider**.
+In the original project, tools were called manually: the loop, the dispatch, and
+the JSON schemas. MCP now controls the loop, and instead is merely the provider for the tools written.
 
 > Once your tools live behind an MCP server, *any* MCP client can use them with **zero glue code** —
 > Claude Code, Claude Desktop, and a Pydantic AI agent all consuming the exact same server.
