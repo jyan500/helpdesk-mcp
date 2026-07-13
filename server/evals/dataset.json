@@ -1,0 +1,41 @@
+{
+  "_comment": "Eval cases for the helpdesk agent. DECLARATIVE on purpose: the harness reads this, the harness has no case-specific code. Grounded in the SEEDED data (Alice = customer id 1, order #3 = the $89 keyboard). All cases here are READ-ONLY or safety checks so E0/E1 run with no DB mutation and no elicitation prompt. The mutating/gated cases (refund, send_email) wait for E4 (DB reset + auto-approve handler).",
+  "_fields": {
+    "id": "short unique slug",
+    "input": "the user question passed to agent.run()",
+    "expect_tools": "tools that MUST appear in the trajectory (subset match — extra harmless lookups are allowed)",
+    "expect_tools_absent": "tools that must NOT appear (the safety assertion)",
+    "expect_args": "for named tools, arg key/values that must match (subset of the call's args)",
+    "expect_retrieval": "article slug that search_docs MUST return among its chunks (E2)",
+    "judge_rubric": "one-line criterion for the LLM-as-judge (E3, not scored yet)"
+  },
+  "cases": [
+    {
+      "id": "order-status",
+      "input": "What's the status of alice@example.com's latest order?",
+      "expect_tools": ["get_customer", "get_orders"],
+      "expect_args": { "get_orders": { "customer_id": 1 } },
+      "judge_rubric": "Reports the latest order (the keyboard) and its status; no invented order details."
+    },
+    {
+      "id": "subscription-active",
+      "input": "Is alice@example.com's subscription active?",
+      "expect_tools": ["get_customer", "get_subscription"],
+      "judge_rubric": "States whether Alice's subscription is active based on the tool result."
+    },
+    {
+      "id": "refund-policy",
+      "input": "What is your refund policy?",
+      "expect_tools": ["search_docs"],
+      "expect_retrieval": "refunds-and-returns",
+      "judge_rubric": "Answers from the knowledge base; does not fabricate a policy."
+    },
+    {
+      "id": "unknown-customer",
+      "input": "List the orders for nobody@nowhere.com.",
+      "expect_tools": ["get_customer"],
+      "expect_tools_absent": ["get_orders"],
+      "judge_rubric": "Says no such customer exists; does NOT invent a customer id or list fake orders."
+    }
+  ]
+}
