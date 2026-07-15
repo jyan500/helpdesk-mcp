@@ -181,6 +181,58 @@ gated — stays yours** (`tools/action.REQUIRES_APPROVAL`); the protocol only st
 
 ---
 
+## Evaluating the agent
+
+"Does the agent work?" isn't something you can eyeball once. `server/evals/` is a small **evaluation
+harness** that turns it into a repeatable, scored test suite: it runs the agent over a declarative
+dataset (`dataset.json`) and asserts on **what the agent did**, not just what it said.
+
+The whole trick is one seam. `agent.run()` returns a result whose `all_messages()` is the full history
+the framework built — every `ToolCallPart` (what the model *sent*) and `ToolReturnPart` (what each tool
+*returned*). So the harness inspects the actual tool trajectory and tool outputs, rather than grading
+prose and hoping.
+
+Four orthogonal dimensions, each its own scorer:
+
+| Dimension | Reads | Kind | Example assertion |
+| --- | --- | --- | --- |
+| **Trajectory / args / absent** | tool **calls** | deterministic | the refund case chained `get_customer → get_orders → issue_refund`; the unknown-customer case **never** called `get_orders` |
+| **Retrieval** | tool **returns** | deterministic | `search_docs` returned the `refunds-and-returns` chunk — catches an un-ingested KB *directly*, not via a sad answer |
+| **Answer quality** | final **prose** | **LLM-as-judge** | a second Gemini agent with `output_type=Verdict` grades the answer against each case's rubric |
+
+Two things make the **mutating** cases (the gated refund) safe to run unattended:
+
+- **DB isolation** — `reset_db()` restores the rows the tools mutate (the customer's *latest* order →
+  `shipped`, tickets cleared) before each case. It *can't* simply transaction-rollback: the agent
+  mutates in a separate subprocess (the stdio server) with its own sessions, so isolation is a targeted
+  restore, not a rollback — the deep reason test isolation is harder here than for a plain function.
+- **Auto-approve** — the harness supplies an elicitation handler that accepts every gate, so
+  `issue_refund` runs without blocking. Safe *only* because the actions are mocked and reset; a **test
+  affordance, never a real-client design**.
+
+> Every scorer is validated with a **negative control**: break the data → `args` fails; break the
+> expected slug → `retrieval` fails; tighten a rubric past what the answer can satisfy → `answer`
+> fails. Proving each scorer *can* fail is what separates a real test suite from four columns that
+> always print `True`.
+
+Run it (from `server/`):
+
+```bash
+python -m evals.harness
+```
+
+```
+****** Pass/Fail Table ******
+id: order-status      trajectory: True  args: True  retrieval: True  answer: True  passed: True
+id: subscription-active  trajectory: True  args: True  retrieval: True  answer: True  passed: True
+id: refund-policy     trajectory: True  args: True  retrieval: True  answer: True  passed: True
+id: unknown-customer  trajectory: True  args: True  retrieval: True  answer: True  passed: True
+id: refund-latest     trajectory: True  args: True  retrieval: True  answer: True  passed: True
+5/5 passed | 12649 tokens | 10.91s
+```
+
+---
+
 ## Knowledge agent (RAG) — reused
 
 `server/knowledge/*.md` are chunked, embedded locally with `sentence-transformers`
@@ -244,6 +296,7 @@ server/
     ingest.py             # `python -m db.ingest` — chunk + embed + store the articles
   knowledge/*.md          # the help-center source documents
   utils/                  # embeddings, genai client, constants
+  evals/                  # ← EVAL HARNESS: harness.py + dataset.json (scored regression suite)
 
   agent/                  # KEPT FOR REFERENCE (the hand-built "before"): loop.py, orchestrator.py, …
 client/                   # KEPT FOR REFERENCE: the original Next.js UI (not part of the MCP path)
@@ -318,3 +371,7 @@ Built one thin slice at a time (see `mcp-helpdesk-build-plan.md`):
 - **Phase 3** — drive the server with a **Pydantic AI** agent; compare to the kept `agent/loop.py`.
 - **Phase 4** — flip to **Streamable HTTP**; one running server used by 2+ clients at once.
 - **Phase 5** — protocol-level **approval via elicitation** for the gated actions.
+
+**Beyond the plan** — an **[evaluation harness](#evaluating-the-agent)** (`server/evals/`) that scores
+agent runs on tool trajectory, retrieval quality, and answer quality (LLM-as-judge), with per-case DB
+isolation so it can safely exercise the gated refund action.

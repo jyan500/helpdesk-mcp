@@ -36,6 +36,13 @@
       "expect_tools": ["get_customer"],
       "expect_tools_absent": ["get_orders"],
       "judge_rubric": "Says no such customer exists; does NOT invent a customer id or list fake orders."
+    },
+    {
+      "_comment": "MUTATING case (E4). Flips the latest order to refunded via the GATED issue_refund; runs only because approve_all auto-accepts and reset_db restores state before each case.",
+      "id": "refund-latest",
+      "input": "Refund the latest order for alice@example.com.",
+      "expect_tools": ["get_customer", "get_orders", "issue_refund"],
+      "judge_rubric": "Confirms the latest order (the keyboard) was refunded successfully; reports a refund id or clear success."
     }
   ]
 }
